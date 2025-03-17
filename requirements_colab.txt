@@ -1,0 +1,8 @@
+chex==0.1.86
+craftax==1.4.3
+gymnasium==0.29.1
+gymnax==0.0.7
+kiwisolver==1.4.5
+matplotlib==3.8.4
+orbax-checkpoint==0.5.9
+seaborn

@@ -18,7 +18,7 @@ config = {
     "LR": 2e-4,
     "NUM_ENVS": 512,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 1e6,
+    "TOTAL_TIMESTEPS": 1e7,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 8,
     "GAMMA": 0.99,
@@ -43,7 +43,7 @@ config = {
     "WANDB_MODE": "online",  # Set to "online" to enable wandb logging
     "WANDB_PROJECT": "lit-transformer-ppo",
     "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
-    "WANDB_LOG_FREQ": 10,    # Log every N updates
+    "WANDB_LOG_FREQ": 1,    # Log every N updates
 }
 
 # Initialize wandb if enabled
@@ -68,7 +68,10 @@ except:
 print("Start compiling and training")
 time_a=time.time()
 rng = jax.random.PRNGKey(seed)
+
 train_jit = jax.jit(make_train(config))
+print(f"Compilation finished in {time.time() - time_a:.2f} seconds")
+
 out = train_jit(rng)
 print("training and compilation took " + str(time.time()-time_a))
 
