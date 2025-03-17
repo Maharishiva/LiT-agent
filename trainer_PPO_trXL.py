@@ -480,12 +480,18 @@ def make_train(config):
             
             # Log to wandb if enabled
             if config.get("WANDB_MODE", "disabled") == "online":
-                def callback(metrics):
-                    # Log every N timesteps, using a simple modulo check
-                    if metrics["timesteps"] % 1000 == 0:
-                        wandb.log(metrics)
+                def callback(update, return_val, episode_length, timesteps):
+                    # Log every WANDB_LOG_FREQ updates
+                    if update % config["WANDB_LOG_FREQ"] == 0:
+                        wandb.log({
+                            "return": float(return_val),
+                            "episode_length": float(episode_length),
+                            "timesteps": int(timesteps),
+                            "update": int(update)
+                        })
                 
-                jax.debug.callback(callback, metrics)
+                jax.debug.callback(callback, metrics["update"], metrics["return"], 
+                                  metrics["episode_length"], metrics["timesteps"])
             
             rng = update_state[-1]
             runner_state = (train_state, env_state,memories,memories_mask,memories_mask_idx, last_obs,done,0, rng)
