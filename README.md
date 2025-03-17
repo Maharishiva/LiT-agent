@@ -1,4 +1,4 @@
-# TransformerXL PPO with Thinking Tokens
+# (LiT-agent) TransformerXL PPO with Thinking Tokens
 
 An experimental implementation of TransformerXL PPO that adds thinking tokens to the agent's action space, allowing the model to perform internal reasoning steps before committing to environment actions.
 
