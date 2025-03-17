@@ -1,16 +1,24 @@
+import os
 import time
 from trainer_PPO_trXL import make_train
+import wandb
 import jax
-import os
 import jax.numpy as jnp
 
-
+# Set device in a safer way
+try:
+    # Try to print available devices to help with debugging
+    print("Available devices:", jax.devices())
+except:
+    # If that fails, just set CPU platform directly
+    print("Error listing devices, forcing CPU")
+    os.environ["JAX_PLATFORMS"] = "cpu"
 
 config = {
     "LR": 2e-4,
     "NUM_ENVS": 512,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 1e5,
+    "TOTAL_TIMESTEPS": 1e6,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 8,
     "GAMMA": 0.99,
@@ -20,7 +28,7 @@ config = {
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 1.,
     "ACTIVATION": "relu",
-    "ENV_NAME": "MemoryChain-bsuite",
+    "ENV_NAME": "craftax",
     "ANNEAL_LR": True,
     "qkv_features":256,
     "EMBED_SIZE":256,
@@ -31,17 +39,25 @@ config = {
     "WINDOW_GRAD":64,
     "gating":True,
     "gating_bias":2.,
-    "seed":0
+    "seed":0,
+    "WANDB_MODE": "online",  # Set to "online" to enable wandb logging
+    "WANDB_PROJECT": "lit-transformer-ppo",
+    "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
+    "WANDB_LOG_FREQ": 10,    # Log every N updates
 }
 
-
-
+# Initialize wandb if enabled
+if config["WANDB_MODE"] == "online":
+    wandb.init(
+        project=config["WANDB_PROJECT"],
+        entity=config["WANDB_ENTITY"],
+        config=config,
+        name=f"{config['ENV_NAME']}_seed{config['seed']}",
+    )
 
 seed=config["seed"]
 
-prefix= "results_gymnax/"+config["ENV_NAME"]
-
-
+prefix= "results_craftax/"+config["ENV_NAME"]
 
 try:
     if not os.path.exists(prefix):
@@ -56,6 +72,9 @@ train_jit = jax.jit(make_train(config))
 out = train_jit(rng)
 print("training and compilation took " + str(time.time()-time_a))
 
+# Close wandb run if it was enabled
+if config["WANDB_MODE"] == "online":
+    wandb.finish()
 
 import matplotlib.pyplot as plt
 plt.plot(out["metrics"]["returned_episode_returns"])
@@ -64,7 +83,6 @@ plt.ylabel("Return")
 plt.savefig(prefix+"/return_"+str(seed))
 
 plt.clf()
-
 
 jnp.save(prefix+"/"+str(seed)+"_params", out["runner_state"][0].params)
 jnp.save(prefix+"/"+str(seed)+"_config", config)

@@ -169,3 +169,19 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Python virtual environment
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Result directories
+results_craftax/
+results_gymnax/
+
+# Other project specific files
+.DS_Store
+*.log

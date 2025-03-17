@@ -1,0 +1,44 @@
+{
+  "os": "macOS-15.2-arm64-arm-64bit",
+  "python": "CPython 3.9.7",
+  "startedAt": "2025-03-17T17:21:16.560734Z",
+  "program": "/Users/fred/Documents/projects/RL/lit/transformerXL_PPO_JAX/train_PPO_trXL.py",
+  "codePath": "train_PPO_trXL.py",
+  "git": {
+    "remote": "https://github.com/Maharishiva/LiT-agent.git",
+    "commit": "12d9c38d32a26dab1e3e4340638420ce1a47989b"
+  },
+  "email": "fred0014f@gmail.com",
+  "root": "/Users/fred/Documents/projects/RL/lit/transformerXL_PPO_JAX",
+  "host": "freds-MacBook-Pro.local",
+  "executable": "/Users/fred/.pyenv/versions/3.9.7/bin/python3",
+  "codePathLocal": "train_PPO_trXL.py",
+  "cpu_count": 10,
+  "cpu_count_logical": 10,
+  "disk": {
+    "/": {
+      "total": "994662584320",
+      "used": "514303242240"
+    },
+    "/System/Volumes/Data": {
+      "total": "994662584320",
+      "used": "514303242240"
+    }
+  },
+  "memory": {
+    "total": "34359738368"
+  },
+  "cpu": {
+    "count": 10,
+    "countLogical": 10
+  },
+  "apple": {
+    "name": "Apple M1 Pro",
+    "ecpuCores": 2,
+    "pcpuCores": 8,
+    "gpuCores": 16,
+    "memoryGb": 32,
+    "swapTotalBytes": "3221225472",
+    "ramTotalBytes": "34359738368"
+  }
+}

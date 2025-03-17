@@ -1,0 +1,83 @@
+_wandb:
+    value:
+        cli_version: 0.19.8
+        m: []
+        python_version: 3.9.7
+        t:
+            "1":
+                - 12
+                - 45
+                - 55
+            "2":
+                - 12
+                - 45
+                - 55
+            "3":
+                - 13
+                - 16
+                - 23
+                - 55
+            "4": 3.9.7
+            "5": 0.19.8
+            "8":
+                - 5
+            "12": 0.19.8
+            "13": darwin-arm64
+ACTIVATION:
+    value: relu
+ANNEAL_LR:
+    value: true
+CLIP_EPS:
+    value: 0.2
+EMBED_SIZE:
+    value: 256
+ENT_COEF:
+    value: 0.01
+ENV_NAME:
+    value: craftax
+GAE_LAMBDA:
+    value: 0.8
+GAMMA:
+    value: 0.99
+LR:
+    value: 0.0002
+MAX_GRAD_NORM:
+    value: 1
+NUM_ENVS:
+    value: 512
+NUM_MINIBATCHES:
+    value: 8
+NUM_STEPS:
+    value: 128
+TOTAL_TIMESTEPS:
+    value: 1e+06
+UPDATE_EPOCHS:
+    value: 4
+VF_COEF:
+    value: 0.5
+WANDB_ENTITY:
+    value: maharishiva
+WANDB_LOG_FREQ:
+    value: 10
+WANDB_MODE:
+    value: online
+WANDB_PROJECT:
+    value: lit-transformer-ppo
+WINDOW_GRAD:
+    value: 64
+WINDOW_MEM:
+    value: 128
+gating:
+    value: true
+gating_bias:
+    value: 2
+hidden_layers:
+    value: 256
+num_heads:
+    value: 8
+num_layers:
+    value: 2
+qkv_features:
+    value: 256
+seed:
+    value: 0
