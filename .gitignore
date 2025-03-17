@@ -185,3 +185,6 @@ results_gymnax/
 # Other project specific files
 .DS_Store
 *.log
+
+# Weights & Biases
+wandb/
