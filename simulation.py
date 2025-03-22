@@ -44,11 +44,23 @@ memories_mask = jnp.zeros((1, config["num_heads"], 1, config["WINDOW_MEM"]+1), d
 frames = []
 frames.append(np.array(render_craftax_symbolic(state)))
 
+# Initialize previous action and reward
+prev_action = None
+prev_reward = None
+
 print("Starting simulation...")
 for i in range(1000):
     # Get action from model
     rng, _rng = jax.random.split(rng)
-    pi, _, memories_out = network.apply(params, memories, obs, memories_mask, method=network.model_forward_eval)
+    pi, _, memories_out = network.apply(
+        params, 
+        memories, 
+        obs, 
+        prev_action, 
+        prev_reward, 
+        memories_mask, 
+        method=network.model_forward_eval
+    )
     action = pi.sample(seed=_rng)[0]  # Remove batch dimension from action
     
     # Update memories (simple roll)
@@ -58,6 +70,10 @@ for i in range(1000):
     # Step environment
     rng, _rng = jax.random.split(rng)
     obs, state, reward, done, info = env.step(_rng, state, action, env_params)
+    
+    # Store current action and reward for next step
+    prev_action = jnp.array([action])  # Add batch dimension
+    prev_reward = jnp.array([reward])  # Add batch dimension
     
     # Add batch dimension to new observation
     obs = obs[None, :]

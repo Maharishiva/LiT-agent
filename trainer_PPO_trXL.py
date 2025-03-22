@@ -52,7 +52,10 @@ class ActorCriticTransformer(nn.Module):
                                 encoder_size=self.encoder_size,
                                 num_heads=self.num_heads,
                                 qkv_features=self.qkv_features,
-                                num_layers=self.num_layers,gating=self.gating,gating_bias=self.gating_bias)
+                                num_layers=self.num_layers,
+                                gating=self.gating,
+                                gating_bias=self.gating_bias,
+                                action_dim=self.action_dim)
         
         self.actor_ln1=nn.Dense(self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))
         self.actor_ln2= nn.Dense(
@@ -75,10 +78,8 @@ class ActorCriticTransformer(nn.Module):
         
         
 
-    def __call__(self, memories,obs,mask):
-        
-
-        x,memory_out = self.transformer(memories,obs,mask)
+    def __call__(self, memories, obs, prev_action=None, prev_reward=None, mask=None):
+        x, memory_out = self.transformer(memories, obs, mask, prev_action, prev_reward)
     
         actor_mean = self.actor_ln1(x)
         actor_mean = self.activation_fn(actor_mean)
@@ -95,11 +96,11 @@ class ActorCriticTransformer(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1),memory_out
+        return pi, jnp.squeeze(critic, axis=-1), memory_out
     
-    def model_forward_eval(self, memories,obs,mask):
+    def model_forward_eval(self, memories, obs, prev_action=None, prev_reward=None, mask=None):
         """Used during environment rollout (single timestep of obs). And return the memory"""
-        x,memory_out = self.transformer.forward_eval(memories,obs,mask)
+        x, memory_out = self.transformer.forward_eval(memories, obs, mask, prev_action, prev_reward)
 
         actor_mean = self.actor_ln1(x)
         actor_mean = self.activation_fn(actor_mean)
@@ -116,11 +117,11 @@ class ActorCriticTransformer(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1),memory_out
+        return pi, jnp.squeeze(critic, axis=-1), memory_out
     
-    def model_forward_train(self, memories,obs,mask): 
+    def model_forward_train(self, memories, obs, prev_action=None, prev_reward=None, mask=None): 
         """Used during training: a window of observation is sent. And don't return the memory"""
-        x = self.transformer.forward_train(memories,obs,mask)
+        x = self.transformer.forward_train(memories, obs, mask, prev_action, prev_reward)
 
         actor_mean = self.actor_ln1(x)
         actor_mean = self.activation_fn(actor_mean)
@@ -146,10 +147,12 @@ class Transition(NamedTuple):
     value: jnp.ndarray
     reward: jnp.ndarray
     log_prob: jnp.ndarray
-    memories_mask:jnp.ndarray
-    memories_indices:jnp.ndarray
+    memories_mask: jnp.ndarray
+    memories_indices: jnp.ndarray
     obs: jnp.ndarray
     info: jnp.ndarray
+    prev_action: jnp.ndarray = None
+    prev_reward: jnp.ndarray = None
 
     
     
@@ -204,9 +207,12 @@ def make_train(config):
                             gating_bias=config["gating_bias"],)
         rng, _rng = jax.random.split(rng)
         init_obs = jnp.zeros((2,env.observation_space(env_params).shape[0]))
-        init_memory=jnp.zeros((2,config["WINDOW_MEM"],config["num_layers"],config["EMBED_SIZE"]))
-        init_mask=jnp.zeros((2,config["num_heads"],1,config["WINDOW_MEM"]+1),dtype=jnp.bool_)
-        network_params = network.init(_rng, init_memory,init_obs,init_mask)
+        init_memory = jnp.zeros((2,config["WINDOW_MEM"],config["num_layers"],config["EMBED_SIZE"]))
+        init_mask = jnp.zeros((2,config["num_heads"],1,config["WINDOW_MEM"]+1),dtype=jnp.bool_)
+        init_prev_action = jnp.zeros((2,), dtype=jnp.int32)  # Initial previous actions (zeros)
+        init_prev_reward = jnp.zeros((2,))  # Initial previous rewards (zeros)
+        
+        network_params = network.init(_rng, init_memory, init_obs, init_prev_action, init_prev_reward, init_mask)
         
         
         
@@ -242,52 +248,59 @@ def make_train(config):
             
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
-                train_state, env_state,memories,memories_mask,memories_mask_idx, last_obs,done,step_env_currentloop, rng = runner_state
+                train_state, env_state, memories, memories_mask, memories_mask_idx, last_obs, done, step_env_currentloop, rng, last_action, last_reward = runner_state
                 
                 # reset memories mask and mask idx in cask of done otherwise mask will consider one more stepif not filled (if filled= 
-                memories_mask_idx=jnp.where(done,config["WINDOW_MEM"] ,jnp.clip(memories_mask_idx-1,0,config["WINDOW_MEM"]))
-                memories_mask=jnp.where(done[:,None,None,None],jnp.zeros((config["NUM_ENVS"],config["num_heads"],1,config["WINDOW_MEM"]+1),dtype=jnp.bool_),memories_mask)
+                memories_mask_idx = jnp.where(done, config["WINDOW_MEM"], jnp.clip(memories_mask_idx-1, 0, config["WINDOW_MEM"]))
+                memories_mask = jnp.where(done[:,None,None,None], jnp.zeros((config["NUM_ENVS"], config["num_heads"], 1, config["WINDOW_MEM"]+1), dtype=jnp.bool_), memories_mask)
                 
                 #Update memories mask with the potential additional step taken into account at this step
-                memories_mask_idx_ohot=jax.nn.one_hot(memories_mask_idx,config["WINDOW_MEM"]+1)
-                memories_mask_idx_ohot=memories_mask_idx_ohot[:,None,None,:].repeat(config["num_heads"],1)
-                memories_mask=jnp.logical_or(memories_mask, memories_mask_idx_ohot)
+                memories_mask_idx_ohot = jax.nn.one_hot(memories_mask_idx, config["WINDOW_MEM"]+1)
+                memories_mask_idx_ohot = memories_mask_idx_ohot[:,None,None,:].repeat(config["num_heads"], 1)
+                memories_mask = jnp.logical_or(memories_mask, memories_mask_idx_ohot)
             
-
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
-                pi, value,memories_out = network.apply(train_state.params , memories, last_obs,memories_mask,method=network.model_forward_eval)
+                
+                # Use previous action and reward passed in runner state
+                # For first step in episode (after reset), these will be zeros
+                
+                pi, value, memories_out = network.apply(
+                    train_state.params, 
+                    memories, 
+                    last_obs,
+                    last_action,
+                    last_reward,
+                    memories_mask,
+                    method=network.model_forward_eval
+                )
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 
                 # ADD THE CACHED ACTIVATIONS IN MEMORIES FOR NEXT STEP
-                memories=jnp.roll(memories,-1,axis=1).at[:,-1].set(memories_out)
-                
-                
-                
+                memories = jnp.roll(memories, -1, axis=1).at[:, -1].set(memories_out)
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
-                #rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-                #obsv, env_state, reward, done, info = jax.vmap(env.step, in_axes=(0,0,0,None))(
-                #    rng_step, env_state, action, env_params
-                #)
-                obsv, env_state, reward, done, info =env.step(
+                obsv, env_state, reward, done, info = env.step(
                     _rng, env_state, action, env_params
                 )
                 
-                
-                
                 #COMPUTE THE INDICES OF THE FINAL MEMORIES THAT ARE TAKEN INTO ACCOUNT IN THIS STEP 
-                # not forgeeting that we will concatenate the previous WINDOW_MEM to the NUM_STEPS so that even the first step will use some cached memory.
+                # not forgetting that we will concatenate the previous WINDOW_MEM to the NUM_STEPS so that even the first step will use some cached memory.
                 #previous without this is attend to 0 which are masked but with reset happening if we start the num_steps loop during good to keep memory from previous
-                memory_indices=jnp.arange(0,config["WINDOW_MEM"])[None,:]+step_env_currentloop*jnp.ones((config["NUM_ENVS"],1),dtype=jnp.int32)
+                memory_indices = jnp.arange(0, config["WINDOW_MEM"])[None, :] + step_env_currentloop * jnp.ones((config["NUM_ENVS"], 1), dtype=jnp.int32)
                 
                 transition = Transition(
-                    done, action, value, reward, log_prob,memories_mask.squeeze(),memory_indices, last_obs, info
+                    done, action, value, reward, log_prob, memories_mask.squeeze(), memory_indices, 
+                    last_obs, info, last_action, last_reward
                 )
-                runner_state = (train_state, env_state,memories,memories_mask,memories_mask_idx, obsv,done,step_env_currentloop+1, rng)
-                return runner_state, (transition,memories_out)
+                
+                # Update runner state with new action and reward for next step
+                runner_state = (train_state, env_state, memories, memories_mask, memories_mask_idx, obsv, done, 
+                               step_env_currentloop+1, rng, action, reward)
+                
+                return runner_state, (transition, memories_out)
             
 
             
@@ -300,8 +313,18 @@ def make_train(config):
             )
 
             # CALCULATE ADVANTAGE
-            train_state, env_state,memories,memories_mask,memories_mask_idx, last_obs,done,_, rng = runner_state
-            _, last_val,_ = network.apply(train_state.params, memories,last_obs,memories_mask,method=network.model_forward_eval)
+            train_state, env_state, memories, memories_mask, memories_mask_idx, last_obs, done, _, rng, last_action, last_reward = runner_state
+            
+            # Use last action and reward from runner state
+            _, last_val, _ = network.apply(
+                train_state.params, 
+                memories,
+                last_obs,
+                last_action,
+                last_reward,
+                memories_mask,
+                method=network.model_forward_eval
+            )
 
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
@@ -362,7 +385,18 @@ def make_train(config):
                         
                         
                         # NETWORK OUTPUT
-                        pi, value = network.apply(params,memories_batch, obs,memories_mask,method=network.model_forward_train)
+                        prev_action = traj_batch.prev_action
+                        prev_reward = traj_batch.prev_reward
+                        
+                        pi, value = network.apply(
+                            params,
+                            memories_batch, 
+                            obs,
+                            prev_action,
+                            prev_reward,
+                            memories_mask,
+                            method=network.model_forward_train
+                        )
                         
                         log_prob = pi.log_prob(traj_batch.action)
 
@@ -494,19 +528,26 @@ def make_train(config):
                                   metrics["episode_length"], metrics["timesteps"])
             
             rng = update_state[-1]
-            runner_state = (train_state, env_state,memories,memories_mask,memories_mask_idx, last_obs,done,0, rng)
+            # Reset step_env_currentloop to 0, but keep last_action and last_reward for the next batch
+            runner_state = (train_state, env_state, memories, memories_mask, memories_mask_idx, 
+                           last_obs, done, 0, rng, last_action, last_reward)
             return runner_state, metric
         
         
         # INITIALIZE the memories and memories mask 
         rng, _rng = jax.random.split(rng)
-        memories=jnp.zeros((config["NUM_ENVS"],config["WINDOW_MEM"],config["num_layers"],config["EMBED_SIZE"]))
-        memories_mask=jnp.zeros((config["NUM_ENVS"],config["num_heads"],1,config["WINDOW_MEM"]+1),dtype=jnp.bool_)
-        #memories +1 bc will remove one 
-        memories_mask_idx= jnp.zeros((config["NUM_ENVS"],),dtype=jnp.int32)+(config["WINDOW_MEM"]+1)
-        done=jnp.zeros((config["NUM_ENVS"],),dtype=jnp.bool_)
+        memories = jnp.zeros((config["NUM_ENVS"], config["WINDOW_MEM"], config["num_layers"], config["EMBED_SIZE"]))
+        memories_mask = jnp.zeros((config["NUM_ENVS"], config["num_heads"], 1, config["WINDOW_MEM"]+1), dtype=jnp.bool_)
+        # memories +1 bc will remove one 
+        memories_mask_idx = jnp.zeros((config["NUM_ENVS"],), dtype=jnp.int32) + (config["WINDOW_MEM"]+1)
+        done = jnp.zeros((config["NUM_ENVS"],), dtype=jnp.bool_)
         
-        runner_state = (train_state, env_state,memories,memories_mask,memories_mask_idx, obsv,done,0, _rng)
+        # Initialize previous actions and rewards with zeros
+        init_action = jnp.zeros((config["NUM_ENVS"],), dtype=jnp.int32)
+        init_reward = jnp.zeros((config["NUM_ENVS"],))
+        
+        runner_state = (train_state, env_state, memories, memories_mask, memories_mask_idx, 
+                        obsv, done, 0, _rng, init_action, init_reward)
         runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )

@@ -111,79 +111,99 @@ class Transformer(nn.Module):
     encoder_size: int
     num_heads: int
     qkv_features: int
-    num_layers:int
-    gating: bool =False
-    gating_bias:float =0.
+    num_layers: int
+    gating: bool = False
+    gating_bias: float = 0.
+    action_dim: int = None
 
     def setup(self):
         self.encoder = nn.Dense(self.encoder_size)
-
-        #self.positional_encoding = PositionalEncoding(self.encoder_size, max_len=self.max_len)
+        
+        # Add embeddings for previous action and reward
+        if self.action_dim is not None:
+            self.action_embed = nn.Embed(num_embeddings=self.action_dim, features=self.encoder_size)
+            self.reward_embed = nn.Dense(self.encoder_size)
+            # Projection layer for combined embeddings
+            self.token_projection = nn.Dense(self.encoder_size)
         
         self.tf_layers = [transformer_layer(num_heads=self.num_heads, qkv_features=self.qkv_features,
                                            out_features=self.encoder_size,
-                                           gating=self.gating, gating_bias=self.gating_bias)  for _ in range(self.num_layers)]
-                        
-                        
-        self.pos_emb=PositionalEmbedding(self.encoder_size)
+                                           gating=self.gating, gating_bias=self.gating_bias) for _ in range(self.num_layers)]
+        
+        self.pos_emb = PositionalEmbedding(self.encoder_size)
 
+    def _create_combined_token(self, obs, prev_action=None, prev_reward=None):
+        # Encode observation
+        state_emb = self.encoder(obs)
+        
+        # If action_dim is specified and prev_action/prev_reward are provided, create combined token
+        if self.action_dim is not None and prev_action is not None and prev_reward is not None:
+            # Embed previous action and reward
+            action_emb = self.action_embed(prev_action)
+            
+            # Apply reward embedding to prev_reward
+            # For scalar reward values, add a new axis
+            if state_emb.ndim > prev_reward.ndim:
+                # Add feature dimension for the reward
+                reward_emb = self.reward_embed(prev_reward[..., None])
+            else:
+                # If reward already has enough dimensions
+                reward_emb = self.reward_embed(prev_reward)
+            
+            # Concatenate embeddings - ensure all have same dimensions
+            combined = jnp.concatenate([state_emb, action_emb, reward_emb], axis=-1)
+            
+            # Project back to encoder size
+            token = self.token_projection(combined)
+            return token
+        else:
+            # Fall back to just observation encoding if prev_action/prev_reward not provided
+            return state_emb
     
-    
-    def __call__(self, memories,obs: jnp.ndarray, mask: jnp.ndarray):
-        #forward eval so obs is only one timestep
-        encoded = self.encoder(obs)
-        pos_embed=self.pos_emb(jnp.arange(1+memories.shape[-3],-1,-1))[:1+memories.shape[-3]]
+    def __call__(self, memories, obs, mask, prev_action=None, prev_reward=None):
+        # Create token from obs, prev_action, and prev_reward
+        x = self._create_combined_token(obs, prev_action, prev_reward)
+        pos_embed = self.pos_emb(jnp.arange(1+memories.shape[-3],-1,-1))[:1+memories.shape[-3]]
 
-        x=encoded
-
-        i=0
+        i = 0
         for layer in self.tf_layers:
-            #out_memory=out_memory.at[:,layer].set(x)
-            
-            memory=jnp.concatenate([memories[:,:,i],x[:,None],],axis=-2)
-            #memory=jnp.concatenate([memories[:,:,i],x[:,None],],axis=1)
-            x = layer(values_keys=memory,queries=x[:,None],pos_embed=pos_embed, mask=mask)
-            x=x.squeeze()
-            
-            i=i+1
+            memory = jnp.concatenate([memories[:,:,i], x[:,None]], axis=-2)
+            x = layer(values_keys=memory, queries=x[:,None], pos_embed=pos_embed, mask=mask)
+            x = x.squeeze()
+            i = i+1
             
         return x
 
-    def forward_eval(self, memories,obs: jnp.ndarray, mask: jnp.ndarray):
-        #forward eval so obs is only one timestep
-        encoded = self.encoder(obs)
-           
+    def forward_eval(self, memories, obs, mask, prev_action=None, prev_reward=None):
+        # Create token from obs, prev_action, and prev_reward
+        x = self._create_combined_token(obs, prev_action, prev_reward)
         
-        out_memory=jnp.zeros((encoded.shape[0],self.num_layers,)+encoded.shape[1:])
-        x= encoded
-        i=0
-                        
-                        
-        pos_embed=self.pos_emb(jnp.arange(1+memories.shape[-3],-1,-1))[:1+memories.shape[-3]]      
-                        
+        out_memory = jnp.zeros((x.shape[0], self.num_layers) + x.shape[1:])
+        i = 0
+        
+        pos_embed = self.pos_emb(jnp.arange(1+memories.shape[-3],-1,-1))[:1+memories.shape[-3]]      
+        
         for layer in self.tf_layers:
-            out_memory=out_memory.at[:,i].set(x)
+            out_memory = out_memory.at[:,i].set(x)
             
-            memory=jnp.concatenate([memories[:,:,i],x[:,None]],axis=-2)
-            #memory=jnp.concatenate([memories[:,:,i],x[:,None]],axis=1)
-            x = layer(values_keys=memory,pos_embed=pos_embed,queries=x[:,None], mask=mask)
-            x=x.squeeze()
-            i=i+1
+            memory = jnp.concatenate([memories[:,:,i], x[:,None]], axis=-2)
+            x = layer(values_keys=memory, pos_embed=pos_embed, queries=x[:,None], mask=mask)
+            x = x.squeeze()
+            i = i+1
             
         return x, out_memory
     
-    def forward_train(self,memories,obs,mask):
-        encoded = self.encoder(obs)
+    def forward_train(self, memories, obs, mask, prev_action=None, prev_reward=None):
+        # Create token from obs, prev_action, and prev_reward
+        x = self._create_combined_token(obs, prev_action, prev_reward)
         
-        pos_embed=self.pos_emb(jnp.arange(encoded.shape[-2]+memories.shape[-3],-1,-1))[:encoded.shape[-2]+memories.shape[-3]]
+        pos_embed = self.pos_emb(jnp.arange(x.shape[-2]+memories.shape[-3],-1,-1))[:x.shape[-2]+memories.shape[-3]]
         
-        x=encoded
-        i=0
+        i = 0
         for layer in self.tf_layers:
-            memory=jnp.concatenate([jnp.take(memories,i,-2),x],axis=-2)
-            #memory=jnp.concatenate([memories[:,:,i],x],axis=1)
-            x = layer(values_keys=memory,pos_embed=pos_embed,queries=x, mask=mask)
-            i=i+1
+            memory = jnp.concatenate([jnp.take(memories, i, -2), x], axis=-2)
+            x = layer(values_keys=memory, pos_embed=pos_embed, queries=x, mask=mask)
+            i = i+1
 
         return x
     
