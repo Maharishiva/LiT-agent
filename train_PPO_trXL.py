@@ -30,16 +30,16 @@ config = {
     "ACTIVATION": "relu",
     "ENV_NAME": "craftax",
     "ANNEAL_LR": True,
-    "qkv_features":256,
-    "EMBED_SIZE":256,
-    "num_heads":8,
-    "num_layers":2,
-    "hidden_layers":256,
-    "WINDOW_MEM":128,
-    "WINDOW_GRAD":64,
-    "gating":True,
-    "gating_bias":2.,
-    "seed":0,
+    "qkv_features": 256,
+    "EMBED_SIZE": 256,
+    "num_heads": 8,
+    "num_layers": 2,
+    "hidden_layers": 256,
+    "WINDOW_MEM": 128,
+    "WINDOW_GRAD": 64,
+    "gating": True,
+    "gating_bias": 2.,
+    "seed": 0,
     "WANDB_MODE": "online",  # Set to "online" to enable wandb logging
     "WANDB_PROJECT": "lit-transformer-ppo",
     "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
@@ -57,13 +57,17 @@ if config["WANDB_MODE"] == "online":
 
 seed=config["seed"]
 
-prefix= "results_craftax/"+config["ENV_NAME"]
+prefix = "results_craftax/"+config["ENV_NAME"]
 
+# Create directories with proper error handling
 try:
+    if not os.path.exists("results_craftax"):
+        os.makedirs("results_craftax")
     if not os.path.exists(prefix):
-                os.makedirs(prefix)
-except:
-    print("directory creation " + prefix +" failed")
+        os.makedirs(prefix)
+    print(f"Saving results to {prefix}")
+except Exception as e:
+    print(f"Directory creation {prefix} failed: {str(e)}")
     
 print("Start compiling and training")
 time_a=time.time()
