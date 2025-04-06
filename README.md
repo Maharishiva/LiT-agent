@@ -18,13 +18,23 @@ This project experiments with adding explicit reasoning steps to RL agents, insp
 - We extend the action space with special thinking tokens with randomly initialized embeddings
 - The transformer's memory tracks reasoning traces
 - The reward structure should encourage efficient, meaningful thinking patterns
+- Uses combined token embeddings that concatenate state observations, previous actions, and previous rewards
+
+## Features
+
+- **Combined Token Embeddings**: Each token processed by the transformer is a combination of:
+  - Current observation state embedding
+  - Previous action embedding
+  - Previous reward embedding
+- This enriched sequential representation helps the model capture temporal dependencies in state transitions, agent behavior, and received rewards
 
 ## Roadmap
 
+- [x] Add combined token embeddings (observation, previous action, previous reward)
 - [ ] Adding thinking tokens to the action space and action embedding
 - [ ] Run tests on creaftax and gymnax environments
-- [ ] envistigate the effect of different reward functions and discounting strategies
-- [ ] add world model based learning (museli) style
+- [ ] Investigate the effect of different reward functions and discounting strategies
+- [ ] Add world model based learning (museli) style
 
 
 
