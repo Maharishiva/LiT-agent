@@ -1,0 +1,1 @@
+dirlist -i .gitignore,wandb,.venv,LICENSE,colab_notebook.ipynb,requirements.txt,wrappers.py,play_game.py,simulation.py -o test.txt
