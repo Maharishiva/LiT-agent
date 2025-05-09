@@ -164,15 +164,16 @@ class Transformer(nn.Module):
         # Create token from obs, prev_action, and prev_reward
         x = self._create_combined_token(obs, prev_action, prev_reward)
         pos_embed = self.pos_emb(jnp.arange(1+memories.shape[-3],-1,-1))[:1+memories.shape[-3]]
+        # initialize container for post-layer activations
+        out_memory = jnp.zeros((x.shape[0], self.num_layers) + x.shape[1:])
 
-        i = 0
-        for layer in self.tf_layers:
+        for i, layer in enumerate(self.tf_layers):
             memory = jnp.concatenate([memories[:,:,i], x[:,None]], axis=-2)
             x = layer(values_keys=memory, queries=x[:,None], pos_embed=pos_embed, mask=mask)
             x = x.squeeze()
-            i = i+1
-            
-        return x
+            out_memory = out_memory.at[:, i].set(x)
+
+        return x, out_memory
 
     def forward_eval(self, memories, obs, mask, prev_action=None, prev_reward=None):
         # Create token from obs, prev_action, and prev_reward
@@ -184,11 +185,10 @@ class Transformer(nn.Module):
         pos_embed = self.pos_emb(jnp.arange(1+memories.shape[-3],-1,-1))[:1+memories.shape[-3]]      
         
         for layer in self.tf_layers:
-            out_memory = out_memory.at[:,i].set(x)
-            
             memory = jnp.concatenate([memories[:,:,i], x[:,None]], axis=-2)
             x = layer(values_keys=memory, pos_embed=pos_embed, queries=x[:,None], mask=mask)
             x = x.squeeze()
+            out_memory = out_memory.at[:,i].set(x)
             i = i+1
             
         return x, out_memory
