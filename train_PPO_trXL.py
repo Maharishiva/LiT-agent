@@ -18,7 +18,7 @@ config = {
     "LR": 2e-4,
     "NUM_ENVS": 512,
     "NUM_STEPS": 128,
-    "TOTAL_TIMESTEPS": 1e7,
+    "TOTAL_TIMESTEPS": 1e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 8,
     "GAMMA": 0.99,

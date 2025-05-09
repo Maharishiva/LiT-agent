@@ -231,13 +231,13 @@ class LogWrapper(GymnaxWrapper):
     def __init__(self, env):
         super().__init__(env)
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @jax.jit
     def reset(self, key: chex.PRNGKey, params=None):
         obs, env_state = self._env.reset(key, params)
         state = LogEnvState(env_state, 0.0, 0, 0.0, 0, 0)
         return obs, state
 
-    @partial(jax.jit, static_argnums=(0, 4))
+    @jax.jit
     def step(
         self,
         key: chex.PRNGKey,
