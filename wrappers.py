@@ -149,74 +149,71 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
         return obs, state, reward, done, info
 
 
+@struct.dataclass
+class ThinkingEnvState:
+    env_state: Any
+    thinking_count: int
+    last_obs: Any
+    last_info: Any
 
 class ThinkingWrapper(GymnaxWrapper):
-    """
-    Skip-step wrapper.
-    For each env in the batch, if `action >= action_dim_env` we
-    • return the previous observation,
-    • give reward = r_think, done = False,
-    • do NOT advance the underlying environment state.
-    All shapes stay unchanged, so it composes with other wrappers.
-    """
-
-    def __init__(self, env, action_dim_env: int, r_think: float = -0.05, max_think: int = 8):
+    def __init__(self, env, env_action_dim: int, think_reward: float = -0.005):
         super().__init__(env)
-        self.action_dim_env = action_dim_env
-        self.r_think = jnp.asarray(r_think, dtype=jnp.float32)
-        self.max_think = max_think
+        self.env_action_dim = int(env_action_dim)
+        self.think_reward = float(think_reward)
 
     @partial(jax.jit, static_argnums=(0, 2))
-    def reset(self, rng, params=None):
-        obs, state = self._env.reset(rng, params)
-        # initialize thinking counter at zero
-        thinking_count = jnp.zeros((), dtype=jnp.int32)
-        return obs, (state, obs, thinking_count)
+    def reset(self, key, params=None):
+        obs, inner_state = self._env.reset(key, params)
+
+        info_template = {
+            "returned_episode_returns": jnp.array(0.0,  jnp.float32),
+            "returned_episode_lengths": jnp.array(0,    jnp.int32),
+            "timestep":                jnp.array(0,    jnp.int32),
+            "returned_episode":        jnp.array(False),
+            "thinking_action":         jnp.array(False),
+            "thinking_count":          jnp.array(0,    jnp.int32),
+        }
+        state = ThinkingEnvState(inner_state, 0, obs, info_template)
+        return obs, state
 
     @partial(jax.jit, static_argnums=(0, 4))
-    def step(self, rng, state, action, params=None):
-        """
-        state = (base_state, last_obs, thinking_count)
-        action ∈ [0 … action_dim_env + thinking_vocab - 1]
-        """
-        base_state, last_obs, thinking_count = state
-
-        def _do(args):
-            key_i, st_i, obs_i, count_i, act_i = args
-            obs_i_new, st_new, rew_i, done_i, info_i = self._env.step(
-                key_i, st_i, act_i, params
+    def step(self, key, state: ThinkingEnvState, action, params=None):
+        is_think = action >= self.env_action_dim
+        operand = (key, state, action, params)
+        def _think(op):
+            key, st, act, prm = op
+            info = dict(st.last_info) 
+            info["thinking_action"] = True
+            info["thinking_count"]  = st.thinking_count + 1
+            reward = jnp.asarray(self.think_reward, jnp.float32)
+            done   = jnp.array(False)
+            new_state = ThinkingEnvState(
+                st.env_state, st.thinking_count + 1, st.last_obs, info
             )
-            new_count = jnp.zeros_like(count_i)
-            return obs_i_new, st_new, rew_i, done_i, info_i, new_count
+            return st.last_obs, new_state, reward, done, info
 
-        def _think(args):
-            key_i, st_i, obs_i, count_i, act_i = args
-            rew_i = self.r_think
-            done_i = jnp.asarray(False, dtype=jnp.bool_)
-            info_i = jax.tree_map(lambda x: jnp.zeros_like(x), {})  # empty tree
-            new_count = count_i + 1
-            return obs_i, st_i, rew_i, done_i, info_i, new_count
 
-        def row_step(key_i, st_i, obs_i, count_i, act_i):
-            # only think if under max_think
-            do_think = jnp.logical_and(act_i >= self.action_dim_env, count_i < self.max_think)
-            return jax.lax.cond(
-                do_think,
-                _think,
-                _do,
-                operand=(key_i, st_i, obs_i, count_i, act_i)
+        def _act(op):
+            key, st, act, prm = op
+            obs, inner_state, reward, done, info_inner = self._env.step(
+                key, st.env_state, act, prm
             )
 
-        rng, _rng = jax.random.split(rng)
-        batch_size = self.num_envs if hasattr(self, "num_envs") else last_obs.shape[0]
-        keys = jax.random.split(_rng, batch_size)
-        # vectorise over envs
-        obs_out, st_new, rew, done, info, new_count = jax.vmap(row_step)(
-            keys, base_state, last_obs, thinking_count, action
-        )
+            info = dict(st.last_info)
+            info["returned_episode_returns"]  = info_inner["returned_episode_returns"]
+            info["returned_episode_lengths"]  = info_inner["returned_episode_lengths"]
+            info["returned_episode"]          = info_inner["returned_episode"]
+            info["timestep"]                  = info_inner["timestep"]
+            info["thinking_action"]           = False
+            info["thinking_count"]            = st.thinking_count
 
-        new_state = (st_new, obs_out, new_count)
-        return obs_out, new_state, rew, done, info
+            new_state = ThinkingEnvState(
+                inner_state, st.thinking_count, obs, info
+            )
+            return obs, new_state, reward, done, info
+
+        return jax.lax.cond(is_think, _think, _act, operand)
     
 @struct.dataclass
 class LogEnvState:

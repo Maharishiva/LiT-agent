@@ -183,7 +183,7 @@ def make_train(config):
         env_params=env.default_params
         action_dim_env = env.action_space(env_params).n
         env = LogWrapper(env)
-        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"], config["MAX_THINKING_LEN"])
+        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"])
         env = OptimisticResetVecEnvWrapper(
                 env,
                 num_envs=config["NUM_ENVS"],
@@ -194,7 +194,7 @@ def make_train(config):
         action_dim_env = env.action_space(env_params).n 
         env = FlattenObservationWrapper(env)
         env = LogWrapper(env)
-        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"], config["MAX_THINKING_LEN"])
+        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"])
         env = BatchEnvWrapper(env,config["NUM_ENVS"])
 
     def linear_schedule(count):
@@ -347,7 +347,7 @@ def make_train(config):
                     )
                     is_thinking = jnp.greater_equal(action, network.action_dim_env)
                     # apply thinking penalty to the reward
-                    reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0)
+                    # reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0)
                     gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
                     delta = reward + gamma * next_value * (1 - done) - value
                     gae = (
@@ -514,6 +514,7 @@ def make_train(config):
                 "update": runner_state[0].step_count,
                 "return": metric["returned_episode_returns"],
                 "episode_length": metric["returned_episode_lengths"],
+                "thinking_count": metric["thinking_count"],
             }
             
             # Run the update epochs
@@ -529,18 +530,19 @@ def make_train(config):
             
             # Log to wandb if enabled
             if config.get("WANDB_MODE", "disabled") == "online":
-                def callback(update, return_val, episode_length, timesteps):
+                def callback(update, return_val, episode_length, timesteps, thinking_count):
                     # Log every WANDB_LOG_FREQ updates
                     if update % config["WANDB_LOG_FREQ"] == 0:
                         wandb.log({
                             "return": float(return_val),
                             "episode_length": float(episode_length),
                             "timesteps": int(timesteps),
-                            "update": int(update)
+                            "update": int(update),
+                            "thinking_count": float(thinking_count),
                         })
                 
                 jax.debug.callback(callback, metrics["update"], metrics["return"], 
-                                  metrics["episode_length"], metrics["timesteps"])
+                                  metrics["episode_length"], metrics["timesteps"], metrics["thinking_count"])
             
             rng = update_state[-1]
             # Reset step_env_currentloop to 0, but keep last_action and last_reward for the next batch

@@ -112,10 +112,10 @@ class Transformer(nn.Module):
     num_heads: int
     qkv_features: int
     num_layers: int
-    gating: bool = False
-    gating_bias: float = 0.
     env_action_dim: int  # number of real environment actions
     thinking_vocab: int  # number of thinking actions
+    gating: bool = False
+    gating_bias: float = 0.
 
     @property
     def total_action_dim(self):
