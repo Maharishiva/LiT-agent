@@ -44,6 +44,9 @@ config = {
     "WANDB_PROJECT": "lit-transformer-ppo",
     "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
     "WANDB_LOG_FREQ": 1,    # Log every N updates
+    "THINKING_VOCAB": 65,
+    "R_THINK": -0.005,
+    "MAX_THINKING_LEN": 8,
 }
 
 # Initialize wandb if enabled

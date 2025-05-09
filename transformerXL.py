@@ -114,17 +114,21 @@ class Transformer(nn.Module):
     num_layers: int
     gating: bool = False
     gating_bias: float = 0.
-    action_dim: int = None
+    env_action_dim: int  # number of real environment actions
+    thinking_vocab: int  # number of thinking actions
+
+    @property
+    def total_action_dim(self):
+        return self.env_action_dim + self.thinking_vocab
 
     def setup(self):
         self.encoder = nn.Dense(self.encoder_size)
         
-        # Add embeddings for previous action and reward
-        if self.action_dim is not None:
-            self.action_embed = nn.Embed(num_embeddings=self.action_dim, features=self.encoder_size)
-            self.reward_embed = nn.Dense(self.encoder_size)
-            # Projection layer for combined embeddings
-            self.token_projection = nn.Dense(self.encoder_size)
+        # separate embeddings for environment and thinking actions
+        self.env_action_embed = nn.Embed(num_embeddings=self.env_action_dim, features=self.encoder_size)
+        self.thinking_embed = nn.Embed(num_embeddings=self.thinking_vocab, features=self.encoder_size)
+        self.reward_embed = nn.Dense(self.encoder_size)
+        self.token_projection = nn.Dense(self.encoder_size)
         
         self.tf_layers = [transformer_layer(num_heads=self.num_heads, qkv_features=self.qkv_features,
                                            out_features=self.encoder_size,
@@ -132,33 +136,34 @@ class Transformer(nn.Module):
         
         self.pos_emb = PositionalEmbedding(self.encoder_size)
 
-    def _create_combined_token(self, obs, prev_action=None, prev_reward=None):
-        # Encode observation
+    def _create_combined_token(self, obs, prev_action, prev_reward):
+        """Create a token from observation and (prev_action, prev_reward).
+
+        If prev_action corresponds to a thinking action, the token is *only* the
+        thinking-action embedding.  Otherwise the token is the projected
+        concatenation of [state_emb, action_emb, reward_emb].
+        """
         state_emb = self.encoder(obs)
-        
-        # If action_dim is specified and prev_action/prev_reward are provided, create combined token
-        if self.action_dim is not None and prev_action is not None and prev_reward is not None:
-            # Embed previous action and reward
-            action_emb = self.action_embed(prev_action)
-            
-            # Apply reward embedding to prev_reward
-            # For scalar reward values, add a new axis
-            if state_emb.ndim > prev_reward.ndim:
-                # Add feature dimension for the reward
-                reward_emb = self.reward_embed(prev_reward[..., None])
-            else:
-                # If reward already has enough dimensions
-                reward_emb = self.reward_embed(prev_reward)
-            
-            # Concatenate embeddings - ensure all have same dimensions
-            combined = jnp.concatenate([state_emb, action_emb, reward_emb], axis=-1)
-            
-            # Project back to encoder size
-            token = self.token_projection(combined)
-            return token
-        else:
-            # Fall back to just observation encoding if prev_action/prev_reward not provided
-            return state_emb
+
+        # Determine whether the previous action was a thinking action.
+        is_think = jnp.greater_equal(prev_action, self.env_action_dim)  # bool array
+
+        # Compute indices for embedding look-ups (keep them in-range regardless of branch)
+        env_idx = jnp.where(is_think, 0, prev_action)
+        think_idx = jnp.where(is_think, prev_action - self.env_action_dim, 0)
+
+        env_action_emb = self.env_action_embed(env_idx)
+        thinking_emb = self.thinking_embed(think_idx)
+
+        # Embed reward (always used in non-thinking branch)
+        reward_emb = self.reward_embed(prev_reward[..., None] if state_emb.ndim > prev_reward.ndim else prev_reward)
+
+        # Build env token: concat then linear projection
+        env_token = self.token_projection(jnp.concatenate([state_emb, env_action_emb, reward_emb], axis=-1))
+
+        # Select between thinking token and env token
+        token = jnp.where(is_think[..., None], thinking_emb, env_token)
+        return token
     
     def __call__(self, memories, obs, mask, prev_action=None, prev_reward=None):
         # Create token from obs, prev_action, and prev_reward

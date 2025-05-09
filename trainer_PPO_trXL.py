@@ -22,14 +22,17 @@ from wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
+    ThinkingWrapper,
 )
 
 
 from transformerXL import Transformer
 
 class ActorCriticTransformer(nn.Module):
-    action_dim: Sequence[int]
-    activation: str 
+    # action_dim: int
+    action_dim_env: int
+    thinking_vocab: int
+    activation: str
     hidden_layers:int
     encoder_size: int
     num_heads: int
@@ -40,6 +43,7 @@ class ActorCriticTransformer(nn.Module):
     
     
     def setup(self):
+        self.action_dim = self.action_dim_env + self.thinking_vocab
         
         # USE SETUP AND DIFFERENT FUNCTIONS BECAUSE THE TRAIN IS DIFFERENT FROM EVAL ( as we query just one step in train and don't cache memory in eval)
         
@@ -55,7 +59,8 @@ class ActorCriticTransformer(nn.Module):
                                 num_layers=self.num_layers,
                                 gating=self.gating,
                                 gating_bias=self.gating_bias,
-                                action_dim=self.action_dim)
+                                env_action_dim=self.action_dim_env,
+                                thinking_vocab=self.thinking_vocab)
         
         self.actor_ln1=nn.Dense(self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))
         self.actor_ln2= nn.Dense(
@@ -154,7 +159,7 @@ class Transition(NamedTuple):
     prev_action: jnp.ndarray = None
     prev_reward: jnp.ndarray = None
 
-    
+
     
 indices_select=lambda x,y:x[y]
 batch_indices_select=jax.vmap(indices_select)
@@ -176,7 +181,9 @@ def make_train(config):
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnvNoAutoReset
         env=CraftaxSymbolicEnvNoAutoReset()
         env_params=env.default_params
+        action_dim_env = env.action_space(env_params).n
         env = LogWrapper(env)
+        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"], config["MAX_THINKING_LEN"])
         env = OptimisticResetVecEnvWrapper(
                 env,
                 num_envs=config["NUM_ENVS"],
@@ -184,8 +191,10 @@ def make_train(config):
             )
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
+        action_dim_env = env.action_space(env_params).n 
         env = FlattenObservationWrapper(env)
         env = LogWrapper(env)
+        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"], config["MAX_THINKING_LEN"])
         env = BatchEnvWrapper(env,config["NUM_ENVS"])
 
     def linear_schedule(count):
@@ -196,7 +205,8 @@ def make_train(config):
     def train(rng):
 
         # INIT NETWORK
-        network=ActorCriticTransformer(action_dim=env.action_space(env_params).n,
+        network=ActorCriticTransformer(action_dim_env=env.action_space(env_params).n,
+                             thinking_vocab=config["THINKING_VOCAB"],
                              activation=config["ACTIVATION"],
                             encoder_size=config["EMBED_SIZE"],
                             hidden_layers=config["hidden_layers"],
@@ -329,15 +339,20 @@ def make_train(config):
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
                     gae, next_value = gae_and_next_value
-                    done, value, reward = (
+                    done, value, reward, action = (
                         transition.done,
                         transition.value,
                         transition.reward,
+                        transition.action
                     )
-                    delta = reward + config["GAMMA"] * next_value * (1 - done) - value
+                    is_thinking = jnp.greater_equal(action, network.action_dim_env)
+                    # apply thinking penalty to the reward
+                    reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0)
+                    gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
+                    delta = reward + gamma * next_value * (1 - done) - value
                     gae = (
                         delta
-                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
+                        + gamma * config["GAE_LAMBDA"] * (1 - done) * gae
                     )
                     return (gae, value), gae
 

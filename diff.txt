@@ -1,0 +1,294 @@
+diff --git a/train_PPO_trXL.py b/train_PPO_trXL.py
+index 460403f5..0c93eb5d 100644
+--- a/train_PPO_trXL.py
++++ b/train_PPO_trXL.py
+@@ -44,6 +44,8 @@ config = {
+     "WANDB_PROJECT": "lit-transformer-ppo",
+     "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
+     "WANDB_LOG_FREQ": 1,    # Log every N updates
++    "THINKING_VOCAB": 65,
++    "R_THINK": -0.005,
+ }
+ 
+ # Initialize wandb if enabled
+diff --git a/trainer_PPO_trXL.py b/trainer_PPO_trXL.py
+index 5b9dcad4..03b72cf5 100644
+--- a/trainer_PPO_trXL.py
++++ b/trainer_PPO_trXL.py
+@@ -22,14 +22,17 @@ from wrappers import (
+     OptimisticResetVecEnvWrapper,
+     AutoResetEnvWrapper,
+     BatchEnvWrapper,
++    ThinkingWrapper,
+ )
+ 
+ 
+ from transformerXL import Transformer
+ 
+ class ActorCriticTransformer(nn.Module):
+-    action_dim: Sequence[int]
+-    activation: str 
++    # action_dim: int
++    action_dim_env: int
++    thinking_vocab: int
++    activation: str
+     hidden_layers:int
+     encoder_size: int
+     num_heads: int
+@@ -40,6 +43,7 @@ class ActorCriticTransformer(nn.Module):
+     
+     
+     def setup(self):
++        self.action_dim = self.action_dim_env + self.thinking_vocab
+         
+         # USE SETUP AND DIFFERENT FUNCTIONS BECAUSE THE TRAIN IS DIFFERENT FROM EVAL ( as we query just one step in train and don't cache memory in eval)
+         
+@@ -55,7 +59,8 @@ class ActorCriticTransformer(nn.Module):
+                                 num_layers=self.num_layers,
+                                 gating=self.gating,
+                                 gating_bias=self.gating_bias,
+-                                action_dim=self.action_dim)
++                                env_action_dim=self.action_dim_env,
++                                thinking_vocab=self.thinking_vocab)
+         
+         self.actor_ln1=nn.Dense(self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))
+         self.actor_ln2= nn.Dense(
+@@ -154,7 +159,7 @@ class Transition(NamedTuple):
+     prev_action: jnp.ndarray = None
+     prev_reward: jnp.ndarray = None
+ 
+-    
++
+     
+ indices_select=lambda x,y:x[y]
+ batch_indices_select=jax.vmap(indices_select)
+@@ -176,7 +181,9 @@ def make_train(config):
+         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnvNoAutoReset
+         env=CraftaxSymbolicEnvNoAutoReset()
+         env_params=env.default_params
++        action_dim_env = env.action_space(env_params).n
+         env = LogWrapper(env)
++        env = ThinkingWrapper(env,action_dim_env,config["R_THINK"])
+         env = OptimisticResetVecEnvWrapper(
+                 env,
+                 num_envs=config["NUM_ENVS"],
+@@ -184,8 +191,10 @@ def make_train(config):
+             )
+     else:
+         env, env_params = gymnax.make(config["ENV_NAME"])
++        action_dim_env = env.action_space(env_params).n 
+         env = FlattenObservationWrapper(env)
+         env = LogWrapper(env)
++        env = ThinkingWrapper(env,action_dim_env,config["R_THINK"])
+         env = BatchEnvWrapper(env,config["NUM_ENVS"])
+ 
+     def linear_schedule(count):
+@@ -196,7 +205,8 @@ def make_train(config):
+     def train(rng):
+ 
+         # INIT NETWORK
+-        network=ActorCriticTransformer(action_dim=env.action_space(env_params).n,
++        network=ActorCriticTransformer(action_dim_env=env.action_space(env_params).n,
++                             thinking_vocab=config["THINKING_VOCAB"],
+                              activation=config["ACTIVATION"],
+                             encoder_size=config["EMBED_SIZE"],
+                             hidden_layers=config["hidden_layers"],
+@@ -329,15 +339,20 @@ def make_train(config):
+             def _calculate_gae(traj_batch, last_val):
+                 def _get_advantages(gae_and_next_value, transition):
+                     gae, next_value = gae_and_next_value
+-                    done, value, reward = (
++                    done, value, reward, action = (
+                         transition.done,
+                         transition.value,
+                         transition.reward,
++                        transition.action
+                     )
+-                    delta = reward + config["GAMMA"] * next_value * (1 - done) - value
++                    is_thinking = jnp.greater_equal(action, network.action_dim_env)
++                    # apply thinking penalty to the reward
++                    reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0)
++                    gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
++                    delta = reward + gamma * next_value * (1 - done) - value
+                     gae = (
+                         delta
+-                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
++                        + gamma * config["GAE_LAMBDA"] * (1 - done) * gae
+                     )
+                     return (gae, value), gae
+ 
+diff --git a/transformerXL.py b/transformerXL.py
+index cfef0fd2..ced4392b 100644
+--- a/transformerXL.py
++++ b/transformerXL.py
+@@ -114,17 +114,21 @@ class Transformer(nn.Module):
+     num_layers: int
+     gating: bool = False
+     gating_bias: float = 0.
+-    action_dim: int = None
++    env_action_dim: int  # number of real environment actions
++    thinking_vocab: int  # number of thinking actions
++
++    @property
++    def total_action_dim(self):
++        return self.env_action_dim + self.thinking_vocab
+ 
+     def setup(self):
+         self.encoder = nn.Dense(self.encoder_size)
+         
+-        # Add embeddings for previous action and reward
+-        if self.action_dim is not None:
+-            self.action_embed = nn.Embed(num_embeddings=self.action_dim, features=self.encoder_size)
+-            self.reward_embed = nn.Dense(self.encoder_size)
+-            # Projection layer for combined embeddings
+-            self.token_projection = nn.Dense(self.encoder_size)
++        # separate embeddings for environment and thinking actions
++        self.env_action_embed = nn.Embed(num_embeddings=self.env_action_dim, features=self.encoder_size)
++        self.thinking_embed = nn.Embed(num_embeddings=self.thinking_vocab, features=self.encoder_size)
++        self.reward_embed = nn.Dense(self.encoder_size)
++        self.token_projection = nn.Dense(self.encoder_size)
+         
+         self.tf_layers = [transformer_layer(num_heads=self.num_heads, qkv_features=self.qkv_features,
+                                            out_features=self.encoder_size,
+@@ -132,33 +136,34 @@ class Transformer(nn.Module):
+         
+         self.pos_emb = PositionalEmbedding(self.encoder_size)
+ 
+-    def _create_combined_token(self, obs, prev_action=None, prev_reward=None):
+-        # Encode observation
++    def _create_combined_token(self, obs, prev_action, prev_reward):
++        """Create a token from observation and (prev_action, prev_reward).
++
++        If prev_action corresponds to a thinking action, the token is *only* the
++        thinking-action embedding.  Otherwise the token is the projected
++        concatenation of [state_emb, action_emb, reward_emb].
++        """
+         state_emb = self.encoder(obs)
+-        
+-        # If action_dim is specified and prev_action/prev_reward are provided, create combined token
+-        if self.action_dim is not None and prev_action is not None and prev_reward is not None:
+-            # Embed previous action and reward
+-            action_emb = self.action_embed(prev_action)
+-            
+-            # Apply reward embedding to prev_reward
+-            # For scalar reward values, add a new axis
+-            if state_emb.ndim > prev_reward.ndim:
+-                # Add feature dimension for the reward
+-                reward_emb = self.reward_embed(prev_reward[..., None])
+-            else:
+-                # If reward already has enough dimensions
+-                reward_emb = self.reward_embed(prev_reward)
+-            
+-            # Concatenate embeddings - ensure all have same dimensions
+-            combined = jnp.concatenate([state_emb, action_emb, reward_emb], axis=-1)
+-            
+-            # Project back to encoder size
+-            token = self.token_projection(combined)
+-            return token
+-        else:
+-            # Fall back to just observation encoding if prev_action/prev_reward not provided
+-            return state_emb
++
++        # Determine whether the previous action was a thinking action.
++        is_think = jnp.greater_equal(prev_action, self.env_action_dim)  # bool array
++
++        # Compute indices for embedding look-ups (keep them in-range regardless of branch)
++        env_idx = jnp.where(is_think, 0, prev_action)
++        think_idx = jnp.where(is_think, prev_action - self.env_action_dim, 0)
++
++        env_action_emb = self.env_action_embed(env_idx)
++        thinking_emb = self.thinking_embed(think_idx)
++
++        # Embed reward (always used in non-thinking branch)
++        reward_emb = self.reward_embed(prev_reward[..., None] if state_emb.ndim > prev_reward.ndim else prev_reward)
++
++        # Build env token: concat then linear projection
++        env_token = self.token_projection(jnp.concatenate([state_emb, env_action_emb, reward_emb], axis=-1))
++
++        # Select between thinking token and env token
++        token = jnp.where(is_think[..., None], thinking_emb, env_token)
++        return token
+     
+     def __call__(self, memories, obs, mask, prev_action=None, prev_reward=None):
+         # Create token from obs, prev_action, and prev_reward
+diff --git a/wrappers.py b/wrappers.py
+index f2d38416..bcd277f4 100644
+--- a/wrappers.py
++++ b/wrappers.py
+@@ -149,6 +149,71 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
+         return obs, state, reward, done, info
+ 
+ 
++
++class ThinkingWrapper(GymnaxWrapper):
++    """
++    Skip-step wrapper.
++    For each env in the batch, if `action >= action_dim_env` we
++    • return the previous observation,
++    • give reward = r_think, done = False,
++    • do NOT advance the underlying environment state.
++    All shapes stay unchanged, so it composes with other wrappers.
++    """
++
++    def __init__(self, env, action_dim_env: int, r_think: float = -0.05):
++        super().__init__(env)
++        self.action_dim_env = action_dim_env
++        self.r_think = jnp.asarray(r_think, dtype=jnp.float32)
++
++    @partial(jax.jit, static_argnums=(0, 2))
++    def reset(self, rng, params=None):
++        obs, state = self._env.reset(rng, params)
++        # cache last observation inside the state tuple
++        return obs, (state, obs)
++
++    @partial(jax.jit, static_argnums=(0, 4))
++    def step(self, rng, state, action, params=None):
++        """
++        state = (base_state, last_obs)
++        action ∈ [0 … action_dim_env + THINKING_VOCAB - 1]
++        """
++        base_state, last_obs = state
++
++        def _do_step(args):
++            key_i, st_i, act_i = args
++            obs_i, st_new, rew_i, done_i, info_i = self._env.step(
++                key_i, st_i, act_i, params
++            )
++            return obs_i, st_new, rew_i, done_i, info_i
++
++        def _no_step(args):
++            key_i, st_i, obs_i = args
++            rew_i = jnp.asarray(self.r_think, dtype=jnp.float32)
++            done_i = jnp.asarray(False, dtype=jnp.bool_)
++            info_i = jax.tree_map(lambda x: jnp.zeros_like(x), {})  # empty tree
++            return obs_i, st_i, rew_i, done_i, info_i
++
++        def row_step(key_i, st_i, obs_i, act_i):
++            return jax.lax.cond(
++                act_i < self.action_dim_env,
++                _do_step,
++                _no_step,
++                operand=(key_i, st_i, act_i)
++            )
++
++        # split rng exactly like other wrappers
++        rng, _rng = jax.random.split(rng)
++        keys = jax.random.split(_rng, self.num_envs if hasattr(self, "num_envs") else obs.shape[0])
++
++        # vectorise over envs
++        obs, st_new, rew, done, info = jax.vmap(row_step)(
++            keys, base_state, last_obs, action
++        )
++
++        # keep last obs for next call
++        new_state = (st_new, obs)
++        return obs, new_state, rew, done, info
++    
+ @struct.dataclass
+ class LogEnvState:
+     env_state: Any
+@@ -199,3 +264,4 @@ class LogWrapper(GymnaxWrapper):
+         info["timestep"] = state.timestep
+         info["returned_episode"] = done
+         return obs, state, reward, done, info
++
