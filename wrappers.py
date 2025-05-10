@@ -153,6 +153,7 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
 class ThinkingEnvState:
     env_state: Any
     thinking_count: int
+    thinking_length: int
     last_obs: Any
     last_info: Any
 
@@ -174,30 +175,35 @@ class ThinkingWrapper(GymnaxWrapper):
             "thinking_action":         jnp.array(False),
             "thinking_count":          jnp.array(0,    jnp.int32),
         }
-        state = ThinkingEnvState(inner_state, 0, obs, info_template)
+        state = ThinkingEnvState(inner_state, 0, 0, obs, info_template)
         return obs, state
 
     @partial(jax.jit, static_argnums=(0,))
     def step(self, key, state: ThinkingEnvState, action, params=None):
         is_think = action >= self.env_action_dim
-        operand = (key, state, action, params)
+        # only pass dynamic args needed by cond; use default params inside
+        operand = (key, state, action)
+        # choose env params (fallback to default if None)
+        chosen_params = params if params is not None else self._env.default_params
         def _think(op):
-            key, st, act, prm = op
-            info = dict(st.last_info) 
+            key, st, act = op
+            info = dict(st.last_info)
+            total_count = st.thinking_count + 1
+            thinking_length = st.thinking_length + 1
             info["thinking_action"] = True
-            info["thinking_count"]  = st.thinking_count + 1
+            info["thinking_count"]  = total_count
             reward = jnp.asarray(self.think_reward, jnp.float32)
             done   = jnp.array(False)
             new_state = ThinkingEnvState(
-                st.env_state, st.thinking_count + 1, st.last_obs, info
+                st.env_state, total_count, thinking_length, st.last_obs, info
             )
             return st.last_obs, new_state, reward, done, info
 
 
         def _act(op):
-            key, st, act, prm = op
+            key, st, act = op
             obs, inner_state, reward, done, info_inner = self._env.step(
-                key, st.env_state, act, prm
+                key, st.env_state, act, chosen_params
             )
 
             info = dict(st.last_info)
@@ -209,7 +215,7 @@ class ThinkingWrapper(GymnaxWrapper):
             info["thinking_count"]            = st.thinking_count
 
             new_state = ThinkingEnvState(
-                inner_state, st.thinking_count, obs, info
+                inner_state, st.thinking_count, 0, obs, info
             )
             return obs, new_state, reward, done, info
 

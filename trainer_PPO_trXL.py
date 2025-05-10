@@ -284,6 +284,19 @@ def make_train(config):
                     memories_mask,
                     method=network.model_forward_eval
                 )
+                ### filter the logits to prevent thinking if the thinking length exceeds the allowed limit ###
+                logits = pi.logits
+                thinking_length = env_state.thinking_length
+                total_actions = logits.shape[-1]
+                action_indices = jnp.arange(total_actions)
+                allowed_mask = jnp.logical_or(
+                    thinking_length[:, None] < config["MAX_THINKING_LEN"], # thinking len < max thinking len
+                    action_indices[None, :] < network.action_dim_env, # action is env action
+                )
+                masked_logits = jnp.where(allowed_mask, logits, -jnp.inf)
+                pi = distrax.Categorical(logits=masked_logits)
+                ######
+                
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 
