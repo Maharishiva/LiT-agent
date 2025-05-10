@@ -30,14 +30,14 @@ class BatchEnvWrapper(GymnaxWrapper):
         self.reset_fn = jax.vmap(self._env.reset, in_axes=(0, None))
         self.step_fn = jax.vmap(self._env.step, in_axes=(0, 0, 0, None))
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng, params=None):
         rng, _rng = jax.random.split(rng)
         rngs = jax.random.split(_rng, self.num_envs)
         obs, env_state = self.reset_fn(rngs, params)
         return obs, env_state
 
-    @partial(jax.jit, static_argnums=(0, 4))
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, rng, state, action, params=None):
         rng, _rng = jax.random.split(rng)
         rngs = jax.random.split(_rng, self.num_envs)
@@ -52,11 +52,11 @@ class AutoResetEnvWrapper(GymnaxWrapper):
     def __init__(self, env):
         super().__init__(env)
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, key, params=None):
         return self._env.reset(key, params)
 
-    @partial(jax.jit, static_argnums=(0, 4))
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, rng, state, action, params=None):
 
         rng, _rng = jax.random.split(rng)
@@ -102,14 +102,14 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
         self.reset_fn = jax.vmap(self._env.reset, in_axes=(0, None))
         self.step_fn = jax.vmap(self._env.step, in_axes=(0, 0, 0, None))
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng, params=None):
         rng, _rng = jax.random.split(rng)
         rngs = jax.random.split(_rng, self.num_envs)
         obs, env_state = self.reset_fn(rngs, params)
         return obs, env_state
 
-    @partial(jax.jit, static_argnums=(0, 4))
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, rng, state, action, params=None):
 
         rng, _rng = jax.random.split(rng)
@@ -162,7 +162,7 @@ class ThinkingWrapper(GymnaxWrapper):
         self.env_action_dim = int(env_action_dim)
         self.think_reward = float(think_reward)
 
-    @partial(jax.jit, static_argnums=(0, 2))
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, key, params=None):
         obs, inner_state = self._env.reset(key, params)
 
@@ -177,7 +177,7 @@ class ThinkingWrapper(GymnaxWrapper):
         state = ThinkingEnvState(inner_state, 0, obs, info_template)
         return obs, state
 
-    @partial(jax.jit, static_argnums=(0, 4))
+    @partial(jax.jit, static_argnums=(0,))
     def step(self, key, state: ThinkingEnvState, action, params=None):
         is_think = action >= self.env_action_dim
         operand = (key, state, action, params)
@@ -231,13 +231,13 @@ class LogWrapper(GymnaxWrapper):
     def __init__(self, env):
         super().__init__(env)
 
-    @partial(jax.jit, static_argnums=0)
+    @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey, params=None):
         obs, env_state = self._env.reset(key, params)
         state = LogEnvState(env_state, 0.0, 0, 0.0, 0, 0)
         return obs, state
 
-    @partial(jax.jit, static_argnums=0)
+    @partial(jax.jit, static_argnums=(0,))
     def step(
         self,
         key: chex.PRNGKey,
