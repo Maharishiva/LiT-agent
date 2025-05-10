@@ -248,7 +248,7 @@ def make_train(config):
 
         # Reset ENV
         rng, _rng = jax.random.split(rng)
-        obsv, env_state =env.reset(_rng, env_params)
+        obsv, env_state = env.reset(_rng, None)
         #reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
         #obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
         
@@ -293,7 +293,7 @@ def make_train(config):
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 obsv, env_state, reward, done, info = env.step(
-                    _rng, env_state, action, env_params
+                    _rng, env_state, action, None
                 )
                 
                 #COMPUTE THE INDICES OF THE FINAL MEMORIES THAT ARE TAKEN INTO ACCOUNT IN THIS STEP 
