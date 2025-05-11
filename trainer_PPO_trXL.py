@@ -527,6 +527,7 @@ def make_train(config):
                 "return": metric["returned_episode_returns"],
                 "episode_length": metric["returned_episode_lengths"],
                 "thinking_count": metric["thinking_count"],
+                "env_timesteps": metric["timestep"],  # Add env_timesteps
             }
             
             # Run the update epochs
@@ -542,19 +543,20 @@ def make_train(config):
             
             # Log to wandb if enabled
             if config.get("WANDB_MODE", "disabled") == "online":
-                def callback(update, return_val, episode_length, timesteps, thinking_count):
+                def callback(update, return_val, episode_length, timesteps, thinking_count, env_timesteps):
                     # Log every WANDB_LOG_FREQ updates
                     if update % config["WANDB_LOG_FREQ"] == 0:
                         wandb.log({
                             "return": float(return_val),
                             "episode_length": float(episode_length),
-                            "timesteps": int(timesteps),
+                            "timesteps": int(timesteps),  # This is agent steps
+                            "env_timesteps": int(env_timesteps), # This is environment steps
                             "update": int(update),
                             "thinking_count": float(thinking_count),
                         })
                 
                 jax.debug.callback(callback, metrics["update"], metrics["return"], 
-                                  metrics["episode_length"], metrics["timesteps"], metrics["thinking_count"])
+                                  metrics["episode_length"], metrics["timesteps"], metrics["thinking_count"], metrics["env_timesteps"])
             
             rng = update_state[-1]
             # Reset step_env_currentloop to 0, but keep last_action and last_reward for the next batch
