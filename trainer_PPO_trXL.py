@@ -361,6 +361,16 @@ def make_train(config):
                     is_thinking = jnp.greater_equal(action, network.action_dim_env)
                     # apply thinking penalty to the reward
                     # reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0)
+
+                    ########################################################################
+                    # Intrinsic reward: value-improvement bonus (no extra forward pass)
+                    # Use the value estimate of the *next* state (next_value) that we
+                    # already have inside the GAE scan.  This avoids a second network
+                    # evaluation inside the rollout loop.
+                    intrinsic = jnp.abs(next_value - value)
+                    reward = reward + jnp.where(is_thinking, 0.5 * intrinsic, 0.0)
+                    ########################################################################
+
                     gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
                     delta = reward + gamma * next_value * (1 - done) - value
                     gae = (
