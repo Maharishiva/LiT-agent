@@ -284,7 +284,7 @@ def make_train(config):
                     memories_mask,
                     method=network.model_forward_eval
                 )
-                ### filter the logits to prevent thinking if the thinking length exceeds the allowed limit ###
+                ### mask the logits to prevent thinking if the thinking length exceeds the allowed limit ###
                 logits = pi.logits
                 thinking_length = env_state.thinking_length
                 total_actions = logits.shape[-1]

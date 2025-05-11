@@ -17,7 +17,7 @@ except:
 config = {
     "LR": 2e-4,
     "NUM_ENVS": 512,
-    "NUM_STEPS": 128,
+    "NUM_STEPS": 512, # 128 is the default for craftax
     "TOTAL_TIMESTEPS": 1e8,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 8,
@@ -44,8 +44,8 @@ config = {
     "WANDB_PROJECT": "lit-transformer-ppo",
     "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
     "WANDB_LOG_FREQ": 1,    # Log every N updates
-    "THINKING_VOCAB": 65,
-    "R_THINK": -0.005,
+    "THINKING_VOCAB": 64,
+    "R_THINK": 0.0,
     "MAX_THINKING_LEN": 8,
 }
 
