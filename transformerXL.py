@@ -155,14 +155,15 @@ class Transformer(nn.Module):
         env_action_emb = self.env_action_embed(env_idx)
         thinking_emb = self.thinking_embed(think_idx)
 
+        action_token = jnp.where(is_think[..., None], thinking_emb, env_action_emb)
+
         # Embed reward (always used in non-thinking branch)
         reward_emb = self.reward_embed(prev_reward[..., None] if state_emb.ndim > prev_reward.ndim else prev_reward)
 
-        # Build env token: concat then linear projection
-        env_token = self.token_projection(jnp.concatenate([state_emb, env_action_emb, reward_emb], axis=-1))
+        is_think_bit = is_think.astype(jnp.float32)[..., None]
 
-        # Select between thinking token and env token
-        token = jnp.where(is_think[..., None], thinking_emb, env_token)
+        token = self.token_projection(jnp.concatenate([state_emb, action_token, reward_emb, is_think_bit], axis=-1))
+        
         return token
     
     def __call__(self, memories, obs, mask, prev_action=None, prev_reward=None):
