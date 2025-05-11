@@ -181,12 +181,9 @@ class ThinkingWrapper(GymnaxWrapper):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, key, state: ThinkingEnvState, action, params=None):
         is_think = action >= self.env_action_dim
-        # only pass dynamic args needed by cond; use default params inside
-        operand = (key, state, action)
-        # choose env params (fallback to default if None)
-        chosen_params = params if params is not None else self._env.default_params
+        operand = (key, state, action, params)
         def _think(op):
-            key, st, act = op
+            key, st, act, prm = op
             info = dict(st.last_info)
             total_count = st.thinking_count + 1
             thinking_length = st.thinking_length + 1
@@ -201,9 +198,9 @@ class ThinkingWrapper(GymnaxWrapper):
 
 
         def _act(op):
-            key, st, act = op
+            key, st, act, prm = op
             obs, inner_state, reward, done, info_inner = self._env.step(
-                key, st.env_state, act, chosen_params
+                key, st.env_state, act, prm
             )
 
             info = dict(st.last_info)
