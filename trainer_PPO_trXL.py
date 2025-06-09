@@ -22,14 +22,17 @@ from wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
+    ThinkingWrapper,
 )
 
 
 from transformerXL import Transformer
 
 class ActorCriticTransformer(nn.Module):
-    action_dim: Sequence[int]
-    activation: str 
+    # action_dim: int
+    action_dim_env: int
+    thinking_vocab: int
+    activation: str
     hidden_layers:int
     encoder_size: int
     num_heads: int
@@ -40,6 +43,7 @@ class ActorCriticTransformer(nn.Module):
     
     
     def setup(self):
+        self.action_dim = self.action_dim_env + self.thinking_vocab
         
         # USE SETUP AND DIFFERENT FUNCTIONS BECAUSE THE TRAIN IS DIFFERENT FROM EVAL ( as we query just one step in train and don't cache memory in eval)
         
@@ -55,7 +59,8 @@ class ActorCriticTransformer(nn.Module):
                                 num_layers=self.num_layers,
                                 gating=self.gating,
                                 gating_bias=self.gating_bias,
-                                action_dim=self.action_dim)
+                                env_action_dim=self.action_dim_env,
+                                thinking_vocab=self.thinking_vocab)
         
         self.actor_ln1=nn.Dense(self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))
         self.actor_ln2= nn.Dense(
@@ -154,7 +159,7 @@ class Transition(NamedTuple):
     prev_action: jnp.ndarray = None
     prev_reward: jnp.ndarray = None
 
-    
+
     
 indices_select=lambda x,y:x[y]
 batch_indices_select=jax.vmap(indices_select)
@@ -176,7 +181,9 @@ def make_train(config):
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnvNoAutoReset
         env=CraftaxSymbolicEnvNoAutoReset()
         env_params=env.default_params
+        action_dim_env = env.action_space(env_params).n
         env = LogWrapper(env)
+        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"])
         env = OptimisticResetVecEnvWrapper(
                 env,
                 num_envs=config["NUM_ENVS"],
@@ -184,8 +191,10 @@ def make_train(config):
             )
     else:
         env, env_params = gymnax.make(config["ENV_NAME"])
+        action_dim_env = env.action_space(env_params).n 
         env = FlattenObservationWrapper(env)
         env = LogWrapper(env)
+        env = ThinkingWrapper(env, action_dim_env, config["R_THINK"])
         env = BatchEnvWrapper(env,config["NUM_ENVS"])
 
     def linear_schedule(count):
@@ -196,7 +205,8 @@ def make_train(config):
     def train(rng):
 
         # INIT NETWORK
-        network=ActorCriticTransformer(action_dim=env.action_space(env_params).n,
+        network=ActorCriticTransformer(action_dim_env=env.action_space(env_params).n,
+                             thinking_vocab=config["THINKING_VOCAB"],
                              activation=config["ACTIVATION"],
                             encoder_size=config["EMBED_SIZE"],
                             hidden_layers=config["hidden_layers"],
@@ -238,7 +248,7 @@ def make_train(config):
 
         # Reset ENV
         rng, _rng = jax.random.split(rng)
-        obsv, env_state =env.reset(_rng, env_params)
+        obsv, env_state = env.reset(_rng, None)
         #reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
         #obsv, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_rng, env_params)
         
@@ -274,6 +284,19 @@ def make_train(config):
                     memories_mask,
                     method=network.model_forward_eval
                 )
+                ### mask the logits to prevent thinking if the thinking length exceeds the allowed limit ###
+                logits = pi.logits
+                thinking_length = env_state.thinking_length
+                total_actions = logits.shape[-1]
+                action_indices = jnp.arange(total_actions)
+                allowed_mask = jnp.logical_or(
+                    thinking_length[:, None] < config["MAX_THINKING_LEN"], # thinking len < max thinking len
+                    action_indices[None, :] < network.action_dim_env, # action is env action
+                )
+                masked_logits = jnp.where(allowed_mask, logits, -jnp.inf)
+                pi = distrax.Categorical(logits=masked_logits)
+                ######
+                
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 
@@ -283,7 +306,7 @@ def make_train(config):
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 obsv, env_state, reward, done, info = env.step(
-                    _rng, env_state, action, env_params
+                    _rng, env_state, action, None
                 )
                 
                 #COMPUTE THE INDICES OF THE FINAL MEMORIES THAT ARE TAKEN INTO ACCOUNT IN THIS STEP 
@@ -329,15 +352,19 @@ def make_train(config):
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
                     gae, next_value = gae_and_next_value
-                    done, value, reward = (
+                    done, value, reward, action = (
                         transition.done,
                         transition.value,
                         transition.reward,
+                        transition.action
                     )
-                    delta = reward + config["GAMMA"] * next_value * (1 - done) - value
+                    is_thinking = jnp.greater_equal(action, network.action_dim_env)
+                    # reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0) # already accounted for in wrapper
+                    gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
+                    delta = reward + gamma * next_value * (1 - done) - value
                     gae = (
                         delta
-                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
+                        + gamma * config["GAE_LAMBDA"] * (1 - done) * gae
                     )
                     return (gae, value), gae
 
@@ -499,6 +526,8 @@ def make_train(config):
                 "update": runner_state[0].step_count,
                 "return": metric["returned_episode_returns"],
                 "episode_length": metric["returned_episode_lengths"],
+                "thinking_count": metric["thinking_count"],
+                "env_timesteps": metric["timestep"],  # Add env_timesteps
             }
             
             # Run the update epochs
@@ -514,18 +543,20 @@ def make_train(config):
             
             # Log to wandb if enabled
             if config.get("WANDB_MODE", "disabled") == "online":
-                def callback(update, return_val, episode_length, timesteps):
+                def callback(update, return_val, episode_length, timesteps, thinking_count, env_timesteps):
                     # Log every WANDB_LOG_FREQ updates
                     if update % config["WANDB_LOG_FREQ"] == 0:
                         wandb.log({
                             "return": float(return_val),
                             "episode_length": float(episode_length),
-                            "timesteps": int(timesteps),
-                            "update": int(update)
+                            "timesteps": int(timesteps),  # This is agent steps
+                            "env_timesteps": int(env_timesteps), # This is environment steps
+                            "update": int(update),
+                            "thinking_count": float(thinking_count),
                         })
                 
                 jax.debug.callback(callback, metrics["update"], metrics["return"], 
-                                  metrics["episode_length"], metrics["timesteps"])
+                                  metrics["episode_length"], metrics["timesteps"], metrics["thinking_count"], metrics["env_timesteps"])
             
             rng = update_state[-1]
             # Reset step_env_currentloop to 0, but keep last_action and last_reward for the next batch
