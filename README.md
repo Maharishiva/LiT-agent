@@ -1,5 +1,9 @@
 # (LiT-agent) TransformerXL PPO with Thinking Tokens
 
+<p align="center">
+ <img width="80%" src="https://raw.githubusercontent.com/Maharishiva/LiT-agent/assets/LiT_agent.png" />
+</p>
+
 An experimental implementation of TransformerXL PPO that adds thinking tokens to the agent's action space, allowing the model to perform internal reasoning steps before committing to environment actions.
 
 ## Acknowledgment
@@ -30,9 +34,9 @@ This project experiments with adding explicit reasoning steps to RL agents, insp
 
 ## Roadmap
 
-- [x] Add combined token embeddings (observation, previous action, previous reward)
-- [ ] Adding thinking tokens to the action space and action embedding
-- [ ] Run tests on creaftax and gymnax environments
+- [X] Add combined token embeddings (observation, previous action, previous reward)
+- [X] Adding thinking tokens to the action space and action embedding
+- [X] Run tests on creaftax and gymnax environments
 - [ ] Investigate the effect of different reward functions and discounting strategies
 - [ ] Add world model based learning (museli) style
 
@@ -49,8 +53,9 @@ When using this codebase, please cite both this repository and the original impl
 ```
 @software{LiT-agent,
   author = {Fedor Kurdov},
-  title = {LiT-agent},
+  title = {LiT-agent: TransformerXL PPO with Thinking Tokens},
   year = {2025},
+  keywords = {Transformer ; Reinforcement Learning ; Emergent Reasoning ; Latent Reasoning},
   url = {https://github.com/Maharishiva/LiT-agent/tree/main}
 }
 
