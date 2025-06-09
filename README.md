@@ -1,7 +1,7 @@
 # (LiT-agent) TransformerXL PPO with Thinking Tokens
 
 <p align="center">
- <img width="80%" src="https://raw.githubusercontent.com/Maharishiva/LiT-agent/assets/LiT_agent.png" />
+ <img width="80%" src="https://github.com/Maharishiva/LiT-agent/blob/main/assets/LiT_agent.png" />
 </p>
 
 An experimental implementation of TransformerXL PPO that adds thinking tokens to the agent's action space, allowing the model to perform internal reasoning steps before committing to environment actions.
