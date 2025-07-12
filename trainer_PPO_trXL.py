@@ -152,6 +152,7 @@ class Transition(NamedTuple):
     value: jnp.ndarray
     reward: jnp.ndarray
     log_prob: jnp.ndarray
+    allowed_mask: jnp.ndarray
     memories_mask: jnp.ndarray
     memories_indices: jnp.ndarray
     obs: jnp.ndarray
@@ -315,8 +316,18 @@ def make_train(config):
                 memory_indices = jnp.arange(0, config["WINDOW_MEM"])[None, :] + step_env_currentloop * jnp.ones((config["NUM_ENVS"], 1), dtype=jnp.int32)
                 
                 transition = Transition(
-                    done, action, value, reward, log_prob, memories_mask.squeeze(), memory_indices, 
-                    last_obs, info, last_action, last_reward
+                    done,
+                    action,
+                    value,
+                    reward,
+                    log_prob,
+                    allowed_mask,
+                    memories_mask.squeeze(),
+                    memory_indices,
+                    last_obs,
+                    info,
+                    last_action,
+                    last_reward,
                 )
                 
                 # Update runner state with new action and reward for next step
@@ -417,14 +428,17 @@ def make_train(config):
                         
                         pi, value = network.apply(
                             params,
-                            memories_batch, 
+                            memories_batch,
                             obs,
                             prev_action,
                             prev_reward,
                             memories_mask,
-                            method=network.model_forward_train
+                            method=network.model_forward_train,
                         )
-                        
+
+                        logits = pi.logits
+                        masked_logits = jnp.where(traj_batch.allowed_mask, logits, -jnp.inf)
+                        pi = distrax.Categorical(logits=masked_logits)
                         log_prob = pi.log_prob(traj_batch.action)
 
                         # CALCULATE VALUE LOSS
