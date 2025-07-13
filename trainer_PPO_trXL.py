@@ -79,6 +79,11 @@ class ActorCriticTransformer(nn.Module):
             self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )
         self.critic_out=nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))
+
+        # world model head layers
+        self.wm_ln1 = nn.Dense(self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))
+        self.wm_ln2 = nn.Dense(self.encoder_size, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
+
         
         
         
@@ -102,7 +107,11 @@ class ActorCriticTransformer(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1), memory_out
+        wm_h = self.wm_ln1(x)
+        wm_h = self.activation_fn(wm_h)
+        wm_pred = self.wm_ln2(wm_h)
+
+        return pi, jnp.squeeze(critic, axis=-1), memory_out, wm_pred
     
     def model_forward_eval(self, memories, obs, prev_action=None, prev_reward=None, mask=None):
         """Used during environment rollout (single timestep of obs). And return the memory"""
@@ -143,7 +152,13 @@ class ActorCriticTransformer(nn.Module):
         critic = self.critic_out(
             critic
         )
-        return pi, jnp.squeeze(critic, axis=-1)
+        wm_h = self.wm_ln1(x)
+        wm_h = self.activation_fn(wm_h)
+        wm_pred = self.wm_ln2(wm_h)
+        return pi, jnp.squeeze(critic, axis=-1), wm_pred
+
+    def embed_observation(self, obs):
+        return self.transformer.encoder(obs)
     
 
 
@@ -157,6 +172,7 @@ class Transition(NamedTuple):
     memories_mask: jnp.ndarray
     memories_indices: jnp.ndarray
     obs: jnp.ndarray
+    next_obs: jnp.ndarray
     info: jnp.ndarray
     prev_action: jnp.ndarray = None
     prev_reward: jnp.ndarray = None
@@ -279,8 +295,8 @@ def make_train(config):
                 # For first step in episode (after reset), these will be zeros
                 
                 pi, value, memories_out = network.apply(
-                    train_state.params, 
-                    memories, 
+                    train_state.params,
+                    memories,
                     last_obs,
                     last_action,
                     last_reward,
@@ -327,6 +343,7 @@ def make_train(config):
                     memories_mask.squeeze(),
                     memory_indices,
                     last_obs,
+                    obsv,
                     info,
                     last_action,
                     last_reward,
@@ -355,7 +372,7 @@ def make_train(config):
             
             # Use last action and reward from runner state
             _, last_val, _ = network.apply(
-                train_state.params, 
+                train_state.params,
                 memories,
                 last_obs,
                 last_action,
@@ -431,7 +448,7 @@ def make_train(config):
                         prev_action = traj_batch.prev_action
                         prev_reward = traj_batch.prev_reward
                         
-                        pi, value = network.apply(
+                        pi, value, wm_pred = network.apply(
                             params,
                             memories_batch,
                             obs,
@@ -452,6 +469,17 @@ def make_train(config):
                         masked_logits = jnp.where(allowed_mask, logits, -jnp.inf)
                         pi = distrax.Categorical(logits=masked_logits)
                         log_prob = pi.log_prob(traj_batch.action)
+
+                        # WORLD MODEL LOSS
+                        next_obs = traj_batch.next_obs
+                        next_obs = next_obs.reshape((-1, config["WINDOW_GRAD"]) + next_obs.shape[2:])
+                        target_emb = network.apply(
+                            params,
+                            next_obs,
+                            method=network.embed_observation,
+                        )
+                        target_emb = jax.lax.stop_gradient(target_emb)
+                        wm_loss = jnp.square(wm_pred - target_emb).mean()
 
                         # CALCULATE VALUE LOSS
                         value_pred_clipped = traj_batch.value + (
@@ -483,8 +511,9 @@ def make_train(config):
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
+                            + config.get("WM_COEF", 0.0) * wm_loss
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        return total_loss, (value_loss, loss_actor, entropy, wm_loss)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
