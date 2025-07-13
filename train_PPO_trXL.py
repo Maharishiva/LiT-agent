@@ -47,6 +47,7 @@ config = {
     "THINKING_VOCAB": 8,
     "R_THINK": -0.001,
     "MAX_THINKING_LEN": 8,
+    "WM_COEF": 1.0,
 }
 
 # Initialize wandb if enabled
