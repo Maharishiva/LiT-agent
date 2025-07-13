@@ -15,6 +15,7 @@ import wandb
 # Custom TrainState to track step count
 class CustomTrainState(TrainState):
     step_count: int
+    env_step_count: int
 
 
 from wrappers import (
@@ -243,6 +244,7 @@ def make_train(config):
             params=network_params,
             tx=tx,
             step_count=0,
+            env_step_count=0,
         )
         
         
@@ -345,6 +347,8 @@ def make_train(config):
             runner_state, (traj_batch,memories_batch) = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
             )
+
+            env_steps_batch = jnp.sum(~traj_batch.info["thinking_action"])
 
             # CALCULATE ADVANTAGE
             train_state, env_state, memories, memories_mask, memories_mask_idx, last_obs, done, _, rng, last_action, last_reward = runner_state
@@ -536,6 +540,8 @@ def make_train(config):
                 traj_batch.info,
             )
             metric=jax.tree_map(lambda x: x.mean(),metric)
+
+            env_steps_total = train_state.env_step_count + env_steps_batch
             
             # Simplified wandb logging to match DQN pattern
             # Calculate timesteps - based on update count
@@ -548,7 +554,7 @@ def make_train(config):
                 "return": metric["returned_episode_returns"],
                 "episode_length": metric["returned_episode_lengths"],
                 "thinking_count": metric["thinking_count"],
-                "env_timesteps": metric["timestep"],  # Add env_timesteps
+                "env_timesteps": env_steps_total,
             }
             
             # Run the update epochs
@@ -558,9 +564,12 @@ def make_train(config):
             )
             
             train_state = update_state[0]
-            
-            # Increment step count
-            train_state = train_state.replace(step_count=train_state.step_count + 1)
+
+            # Increment step count and update env step count
+            train_state = train_state.replace(
+                step_count=train_state.step_count + 1,
+                env_step_count=env_steps_total,
+            )
             
             # Log to wandb if enabled
             if config.get("WANDB_MODE", "disabled") == "online":
