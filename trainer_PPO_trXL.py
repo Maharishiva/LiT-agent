@@ -375,7 +375,8 @@ def make_train(config):
                     )
                     is_thinking = jnp.greater_equal(action, network.action_dim_env)
                     # reward = reward + jnp.where(is_thinking, config["R_THINK"], 0.0) # already accounted for in wrapper
-                    gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
+                    # gamma = jnp.where(is_thinking, 1.0, config["GAMMA"])
+                    gamma = config["GAMMA"]
                     delta = reward + gamma * next_value * (1 - done) - value
                     gae = (
                         delta
