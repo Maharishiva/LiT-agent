@@ -294,7 +294,7 @@ def make_train(config):
                 # Use previous action and reward passed in runner state
                 # For first step in episode (after reset), these will be zeros
                 
-                pi, value, memories_out, _ = network.apply(
+                pi, value, memories_out = network.apply(
                     train_state.params,
                     memories,
                     last_obs,
@@ -371,7 +371,7 @@ def make_train(config):
             train_state, env_state, memories, memories_mask, memories_mask_idx, last_obs, done, _, rng, last_action, last_reward = runner_state
             
             # Use last action and reward from runner state
-            _, last_val, _, _ = network.apply(
+            _, last_val, _ = network.apply(
                 train_state.params,
                 memories,
                 last_obs,
