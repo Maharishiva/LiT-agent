@@ -15,16 +15,16 @@ except:
     os.environ["JAX_PLATFORMS"] = "cpu"
 
 config = {
-    "LR": 2e-4,
+    "LR": 3e-4,
     "NUM_ENVS": 512,
     "NUM_STEPS": 128,
     "TOTAL_TIMESTEPS": 3e9,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 8,
-    "GAMMA": 0.999,
-    "GAE_LAMBDA": 0.8,
-    "CLIP_EPS": 0.2,
-    "ENT_COEF": 0.002,
+    "GAMMA": 0.995,
+    "GAE_LAMBDA": 0.95,
+    "CLIP_EPS": 0.05,
+    "ENT_COEF": 0.001,
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 1.,
     "ACTIVATION": "relu",
@@ -44,8 +44,8 @@ config = {
     "WANDB_PROJECT": "lit-transformer-ppo",
     "WANDB_ENTITY": "maharishiva",  # Set to your wandb username or team name
     "WANDB_LOG_FREQ": 1,    # Log every N updates
-    "THINKING_VOCAB": 64,
-    "R_THINK": -0.005,
+    "THINKING_VOCAB": 8,
+    "R_THINK": -0.001,
     "MAX_THINKING_LEN": 8,
 }
 

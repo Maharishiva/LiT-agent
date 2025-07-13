@@ -137,12 +137,12 @@ class Transformer(nn.Module):
         self.pos_emb = PositionalEmbedding(self.encoder_size)
 
     def _create_combined_token(self, obs, prev_action, prev_reward):
-        """Create a token from observation and (prev_action, prev_reward).
-
-        If prev_action corresponds to a thinking action, the token is *only* the
-        thinking-action embedding.  Otherwise the token is the projected
-        concatenation of [state_emb, action_emb, reward_emb].
-        """
+        """Create a transformer token by concatenating:
+        - state embedding
+        - previous-action embedding (env or thinking)
+        - reward embedding
+        - a think flag
+        then projecting to `encoder_size`."""
         state_emb = self.encoder(obs)
 
         # Determine whether the previous action was a thinking action.
