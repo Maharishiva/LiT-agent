@@ -82,7 +82,9 @@ class ActorCriticTransformer(nn.Module):
 
         # world model head layers
         self.wm_ln1 = nn.Dense(self.hidden_layers, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))
-        self.wm_ln2 = nn.Dense(self.encoder_size, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
+        self.wm_state_out = nn.Dense(self.encoder_size, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
+        self.wm_reward_out = nn.Dense(1, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
+        self.wm_value_out = nn.Dense(1, kernel_init=orthogonal(0.01), bias_init=constant(0.0))
 
         
         
@@ -109,9 +111,11 @@ class ActorCriticTransformer(nn.Module):
 
         wm_h = self.wm_ln1(x)
         wm_h = self.activation_fn(wm_h)
-        wm_pred = self.wm_ln2(wm_h)
+        wm_state_pred = self.wm_state_out(wm_h)
+        wm_reward_pred = jnp.squeeze(self.wm_reward_out(wm_h), axis=-1)
+        wm_value_pred = jnp.squeeze(self.wm_value_out(wm_h), axis=-1)
 
-        return pi, jnp.squeeze(critic, axis=-1), memory_out, wm_pred
+        return pi, jnp.squeeze(critic, axis=-1), memory_out, wm_state_pred, wm_reward_pred, wm_value_pred
     
     def model_forward_eval(self, memories, obs, prev_action=None, prev_reward=None, mask=None):
         """Used during environment rollout (single timestep of obs). And return the memory"""
@@ -154,8 +158,10 @@ class ActorCriticTransformer(nn.Module):
         )
         wm_h = self.wm_ln1(x)
         wm_h = self.activation_fn(wm_h)
-        wm_pred = self.wm_ln2(wm_h)
-        return pi, jnp.squeeze(critic, axis=-1), wm_pred
+        wm_state_pred = self.wm_state_out(wm_h)
+        wm_reward_pred = jnp.squeeze(self.wm_reward_out(wm_h), axis=-1)
+        wm_value_pred = jnp.squeeze(self.wm_value_out(wm_h), axis=-1)
+        return pi, jnp.squeeze(critic, axis=-1), wm_state_pred, wm_reward_pred, wm_value_pred
 
     def embed_observation(self, obs):
         return self.transformer.encoder(obs)
@@ -411,14 +417,15 @@ def make_train(config):
                 return advantages, advantages + traj_batch.value
 
             advantages, targets = _calculate_gae(traj_batch, last_val)
+            next_values = jnp.concatenate([traj_batch.value[1:], last_val[None]], axis=0)
             
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):
                 def _update_minbatch(train_state, batch_info):
-                
-                    traj_batch,memories_batch, advantages, targets = batch_info
-                    def _loss_fn(params, traj_batch,memories_batch, gae, targets):
+
+                    traj_batch, memories_batch, advantages, targets, next_values = batch_info
+                    def _loss_fn(params, traj_batch, memories_batch, next_values, gae, targets):
                         
                         
                         # USE THE CACHED MEMORIES ONLY FROM THE FIRST STEP OF A WINDOW GRAD Because all other will be computed again here.
@@ -439,7 +446,10 @@ def make_train(config):
                         obs=traj_batch.obs
                         obs=obs.reshape((-1,config["WINDOW_GRAD"] ,)+obs.shape[2:])
 
-                        traj_batch,targets,gae=jax.tree_util.tree_map(lambda x : jnp.reshape(x,(-1,config["WINDOW_GRAD"])+x.shape[2:]),(traj_batch,targets,gae))
+                        traj_batch, targets, gae, next_values = jax.tree_util.tree_map(
+                            lambda x: jnp.reshape(x, (-1, config["WINDOW_GRAD"]) + x.shape[2:]),
+                            (traj_batch, targets, gae, next_values),
+                        )
                       
   
                         
@@ -448,7 +458,7 @@ def make_train(config):
                         prev_action = traj_batch.prev_action
                         prev_reward = traj_batch.prev_reward
                         
-                        pi, value, wm_pred = network.apply(
+                        pi, value, wm_state_pred, wm_reward_pred, wm_value_pred = network.apply(
                             params,
                             memories_batch,
                             obs,
@@ -479,7 +489,12 @@ def make_train(config):
                             method=network.embed_observation,
                         )
                         target_emb = jax.lax.stop_gradient(target_emb)
-                        wm_loss = jnp.square(wm_pred - target_emb).mean()
+                        target_reward = traj_batch.reward
+                        target_next_value = next_values
+                        wm_state_loss = jnp.square(wm_state_pred - target_emb).mean()
+                        wm_reward_loss = jnp.square(wm_reward_pred - target_reward).mean()
+                        wm_value_loss = jnp.square(wm_value_pred - target_next_value).mean()
+                        wm_loss = wm_state_loss + wm_reward_loss + wm_value_loss
 
                         # CALCULATE VALUE LOSS
                         value_pred_clipped = traj_batch.value + (
@@ -517,12 +532,12 @@ def make_train(config):
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
-                        train_state.params, traj_batch,memories_batch, advantages, targets
+                        train_state.params, traj_batch, memories_batch, next_values, advantages, targets
                     )
                     train_state = train_state.apply_gradients(grads=grads)
                     return train_state, total_loss
 
-                train_state, traj_batch,memories_batch, advantages, targets, rng = update_state
+                train_state, traj_batch, memories_batch, advantages, targets, next_values, rng = update_state
                 rng, _rng = jax.random.split(rng)            
                 #batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
                 assert (
@@ -532,7 +547,7 @@ def make_train(config):
                 
                 # PERMUTE ALONG THE NUM_ENVS ONLY NOT TO LOOSE TRACK FROM TEMPORAL 
                 permutation = jax.random.permutation(_rng, config["NUM_ENVS"])
-                batch = (traj_batch,memories_batch, advantages, targets)
+                batch = (traj_batch, memories_batch, advantages, targets, next_values)
                 batch = jax.tree_util.tree_map(
                     lambda x:  jnp.swapaxes(x,0,1),
                     batch,
@@ -553,7 +568,7 @@ def make_train(config):
                     _update_minbatch, train_state, minibatches
                 )
 
-                update_state = (train_state, traj_batch,memories_batch, advantages, targets, rng)
+                update_state = (train_state, traj_batch, memories_batch, advantages, targets, next_values, rng)
                 return update_state, total_loss
             
             
@@ -588,7 +603,7 @@ def make_train(config):
             }
             
             # Run the update epochs
-            update_state = (train_state, traj_batch,memories_batch, advantages, targets, rng)
+            update_state = (train_state, traj_batch, memories_batch, advantages, targets, next_values, rng)
             update_state, loss_info = jax.lax.scan(
                 _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
             )
